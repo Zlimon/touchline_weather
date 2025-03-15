@@ -1,0 +1,11 @@
+{
+  "codeowners": ["@Zlimon"],
+  "config_flow": false,
+  "dependencies": [],
+  "documentation": "https://github.com/Zlimon/touchline_weather",
+  "domain": "touchline_weather",
+  "iot_class": "cloud_polling",
+  "name": "Touchline Weather Adaptive Controller",
+  "requirements": ["pytouchline_extended", "aiohttp"],
+  "version": "1.0.0"
+}
