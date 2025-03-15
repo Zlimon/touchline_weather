@@ -398,7 +398,13 @@ class WeatherAdaptiveTouchline(ClimateEntity):
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         if kwargs.get(ATTR_TEMPERATURE) is not None:
-            self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
+            target_temperature = kwargs.get(ATTR_TEMPERATURE)
             # Turn off weather adaptive mode if user manually sets temperature
             self._weather_adaptive_mode = False
-        self.unit.set_target_temperature(self._target_temperature)
+            # Use the coordinator's device instead of self.unit
+            await self.hass.async_add_executor_job(
+                self.coordinator.devices[self.device_id].set_target_temperature,
+                target_temperature
+            )
+            # Request refresh to update state
+            await self.coordinator.async_request_refresh()
