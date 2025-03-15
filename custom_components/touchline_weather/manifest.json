@@ -3,6 +3,7 @@
   "config_flow": false,
   "dependencies": [],
   "documentation": "https://github.com/Zlimon/touchline_weather",
+  "issue_tracker": "https://github.com/Zlimon/touchline_weather/issues",
   "domain": "touchline_weather",
   "iot_class": "cloud_polling",
   "name": "Touchline Weather Adaptive Controller",
