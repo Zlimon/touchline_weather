@@ -269,10 +269,16 @@ async def async_setup_platform(
 
     async_add_entities(devices, False)  # False because we already updated via coordinator
 
-    # Set up periodic weather updates if adaptation is enabled
+    # Register a service to manually trigger weather updates
     if weather_adaptation:
-        async_track_time_interval(
-            hass, weather_manager.update_forecast, update_interval
+        async def handle_force_weather_update(call):
+            """Handle the service call to force a weather update."""
+            _LOGGER.info("Manual weather update triggered")
+            await weather_manager.update_forecast()
+
+        # Register our new service
+        hass.services.async_register(
+            DOMAIN, 'force_weather_update', handle_force_weather_update
         )
 
 
