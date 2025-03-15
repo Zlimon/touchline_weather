@@ -28,11 +28,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-_LOGGER = logging.getLogger(__name__)
-
-
-# Configuration constants
 from .const import (
     CONF_WEATHER_API_KEY,
     CONF_LATITUDE,
@@ -41,7 +38,10 @@ from .const import (
     CONF_BASE_TEMP,
     CONF_ADJUSTMENT_FACTOR,
     CONF_UPDATE_INTERVAL,
+    DOMAIN,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 # Default values
 DEFAULT_UPDATE_INTERVAL = datetime.timedelta(hours=1)
@@ -86,61 +86,50 @@ PLATFORM_SCHEMA = CLIMATE_PLATFORM_SCHEMA.extend({
 })
 
 
-async def async_setup_platform(
+class TouchlineDataUpdateCoordinator(DataUpdateCoordinator):
+    """Class to manage fetching Touchline data."""
+
+    def __init__(
+        self,
         hass: HomeAssistant,
-        config: ConfigType,
-        async_add_entities: AddEntitiesCallback,
-        discovery_info: DiscoveryInfoType | None = None,
-) -> None:
-    """Set up the Touchline devices with weather adaptation."""
-
-    host = config[CONF_HOST]
-    weather_adaptation = config[CONF_WEATHER_ADAPTATION]
-
-    # Weather API settings
-    weather_api_key = config.get(CONF_WEATHER_API_KEY)
-    latitude = config.get(CONF_LATITUDE, hass.config.latitude)
-    longitude = config.get(CONF_LONGITUDE, hass.config.longitude)
-    base_temp = config[CONF_BASE_TEMP]
-    adjustment_factor = config[CONF_ADJUSTMENT_FACTOR]
-    update_interval = config[CONF_UPDATE_INTERVAL]
-
-    # Check if weather adaptation is enabled but missing API key
-    if weather_adaptation and not weather_api_key:
-        _LOGGER.error("Weather adaptation enabled but no API key provided")
-        return
-
-    py_touchline = PyTouchline(url=host)
-    number_of_devices = int(py_touchline.get_number_of_devices())
-
-    weather_manager = None
-    if weather_adaptation:
-        weather_manager = WeatherManager(
+        logger: logging.Logger,
+        py_touchline: PyTouchline,
+        update_interval: datetime.timedelta,
+    ):
+        """Initialize the coordinator."""
+        super().__init__(
             hass,
-            weather_api_key,
-            latitude,
-            longitude,
-            base_temp,
-            adjustment_factor
+            logger,
+            name=DOMAIN,
+            update_interval=update_interval,
         )
-        await weather_manager.update_forecast()
+        self.py_touchline = py_touchline
+        self.device_count = None
+        self.devices = {}
 
-    devices = []
-    for device_id in range(number_of_devices):
-        device = WeatherAdaptiveTouchline(
-            PyTouchline(id=device_id, url=host),
-            weather_manager,
-            weather_adaptation
-        )
-        devices.append(device)
+    async def _async_update_data(self):
+        """Fetch data from API endpoint."""
+        try:
+            # Initial fetch to get number of devices (if not already done)
+            if self.device_count is None:
+                self.device_count = await self.hass.async_add_executor_job(
+                    self.py_touchline.get_number_of_devices
+                )
+                self.device_count = int(self.device_count)
+                _LOGGER.debug(f"Found {self.device_count} Touchline devices")
 
-    async_add_entities(devices, True)
+                # Initialize devices
+                for device_id in range(self.device_count):
+                    self.devices[device_id] = PyTouchline(id=device_id, url=self.py_touchline._url)
 
-    # Set up periodic weather updates if adaptation is enabled
-    if weather_adaptation:
-        async_track_time_interval(
-            hass, weather_manager.update_forecast, update_interval
-        )
+            # Update all devices
+            for device_id, device in self.devices.items():
+                await self.hass.async_add_executor_job(device.update)
+
+            return self.devices
+        except Exception as err:
+            _LOGGER.error(f"Error communicating with Touchline: {err}")
+            raise
 
 
 class WeatherManager:
@@ -216,27 +205,96 @@ class WeatherManager:
             self._callback_listeners.append(callback)
 
 
+async def async_setup_platform(
+    hass: HomeAssistant,
+    config: ConfigType,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info: DiscoveryInfoType | None = None,
+) -> None:
+    """Set up the Touchline devices with weather adaptation."""
+
+    host = config[CONF_HOST]
+    weather_adaptation = config[CONF_WEATHER_ADAPTATION]
+
+    # Weather API settings
+    weather_api_key = config.get(CONF_WEATHER_API_KEY)
+    latitude = config.get(CONF_LATITUDE, hass.config.latitude)
+    longitude = config.get(CONF_LONGITUDE, hass.config.longitude)
+    base_temp = config[CONF_BASE_TEMP]
+    adjustment_factor = config[CONF_ADJUSTMENT_FACTOR]
+    update_interval = config[CONF_UPDATE_INTERVAL]
+
+    # Check if weather adaptation is enabled but missing API key
+    if weather_adaptation and not weather_api_key:
+        _LOGGER.error("Weather adaptation enabled but no API key provided")
+        return
+
+    # Create base PyTouchline instance
+    py_touchline = PyTouchline(url=host)
+
+    # Create data update coordinator
+    coordinator = TouchlineDataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        py_touchline,
+        update_interval,
+    )
+
+    # Initial data fetch
+    await coordinator.async_config_entry_first_refresh()
+
+    # Setup weather manager if adaptation is enabled
+    weather_manager = None
+    if weather_adaptation:
+        weather_manager = WeatherManager(
+            hass,
+            weather_api_key,
+            latitude,
+            longitude,
+            base_temp,
+            adjustment_factor
+        )
+        await weather_manager.update_forecast()
+
+    # Create device entities
+    devices = []
+    for device_id in range(coordinator.device_count):
+        device = WeatherAdaptiveTouchline(
+            coordinator,
+            device_id,
+            weather_manager,
+            weather_adaptation
+        )
+        devices.append(device)
+
+    async_add_entities(devices, False)  # False because we already updated via coordinator
+
+    # Set up periodic weather updates if adaptation is enabled
+    if weather_adaptation:
+        async_track_time_interval(
+            hass, weather_manager.update_forecast, update_interval
+        )
+
+
 class WeatherAdaptiveTouchline(ClimateEntity):
     """Representation of a Touchline device with weather adaptation."""
 
     _attr_hvac_mode = HVACMode.HEAT
     _attr_hvac_modes = [HVACMode.HEAT]
     _attr_supported_features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
+        ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     )
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
-    def __init__(self, touchline_thermostat, weather_manager=None, weather_adaptation=False):
+    def __init__(self, coordinator, device_id, weather_manager=None, weather_adaptation=False):
         """Initialize the Touchline device."""
-        self.unit = touchline_thermostat
-        self._name = None
-        self._current_temperature = None
-        self._target_temperature = None
-        self._current_operation_mode = None
-        self._preset_mode = None
+        self.coordinator = coordinator
+        self.device_id = device_id
         self._weather_manager = weather_manager
         self._weather_adaptation = weather_adaptation
         self._weather_adaptive_mode = False
+        self._name = None
+        self._attr_unique_id = f"touchline_weather_{device_id}"
 
         # Register for weather updates if weather adaptation is enabled
         if self._weather_manager:
@@ -246,61 +304,66 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         """Handle weather forecast updates."""
         if self._weather_adaptive_mode:
             self.update_weather_adaptive_temperature()
-            self.schedule_update_ha_state()
+            self.async_write_ha_state()
 
-    async def async_update(self) -> None:
-        """Update thermostat attributes asynchronously."""
-        await self.hass.async_add_executor_job(self.update)
-
-    def update(self) -> None:
-        """Update thermostat attributes."""
-        self.unit.update()
-        self._name = self.unit.get_name()
-        self._current_temperature = self.unit.get_current_temperature()
-        self._target_temperature = self.unit.get_target_temperature()
-
-        operation_mode = self.unit.get_operation_mode()
-        week_program = self.unit.get_week_program()
-        self._preset_mode = TOUCHLINE_HA_PRESETS.get((operation_mode, week_program))
-
-        # Update temperature if in adaptive mode
-        if self._weather_adaptive_mode and self._weather_manager:
-            self.update_weather_adaptive_temperature()
-
-    def update_weather_adaptive_temperature(self):
+    async def update_weather_adaptive_temperature(self):
         """Update target temperature based on weather forecast."""
         if not self._weather_manager or not self._weather_adaptive_mode:
             return
 
-        current_target = self._target_temperature
+        current_target = self.target_temperature
         new_target = self._weather_manager.calculate_target_temperature(current_target)
 
         if abs(new_target - current_target) >= 0.2:  # Only update if significant change
-            _LOGGER.info(f"Setting new weather-adaptive temperature for {self._name}: {new_target}°C")
-            self.unit.set_target_temperature(new_target)
-            self._target_temperature = new_target
+            _LOGGER.info(f"Setting new weather-adaptive temperature for {self.name}: {new_target}°C")
+            await self.hass.async_add_executor_job(
+                self.coordinator.devices[self.device_id].set_target_temperature, new_target
+            )
+            await self.coordinator.async_request_refresh()
+
+    @property
+    def device_info(self):
+        """Return device information about this entity."""
+        return {
+            "identifiers": {(DOMAIN, f"touchline_{self.device_id}")},
+            "name": self.name,
+            "manufacturer": "Roth",
+            "model": "Touchline",
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success
 
     @property
     def name(self):
         """Return the name of the climate device."""
-        return self._name
+        device = self.coordinator.devices[self.device_id]
+        return device.get_name()
 
     @property
     def current_temperature(self):
         """Return the current temperature."""
-        return self._current_temperature
+        device = self.coordinator.devices[self.device_id]
+        return device.get_current_temperature()
 
     @property
     def target_temperature(self):
         """Return the temperature we try to reach."""
-        return self._target_temperature
+        device = self.coordinator.devices[self.device_id]
+        return device.get_target_temperature()
 
     @property
     def preset_mode(self):
         """Return the current preset mode."""
         if self._weather_adaptive_mode:
             return "Weather Adaptive"
-        return self._preset_mode
+
+        device = self.coordinator.devices[self.device_id]
+        operation_mode = device.get_operation_mode()
+        week_program = device.get_week_program()
+        return TOUCHLINE_HA_PRESETS.get((operation_mode, week_program))
 
     @property
     def preset_modes(self):
@@ -310,25 +373,29 @@ class WeatherAdaptiveTouchline(ClimateEntity):
             modes.remove("Weather Adaptive")
         return modes
 
-    def set_preset_mode(self, preset_mode):
+    async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
         self._weather_adaptive_mode = preset_mode == "Weather Adaptive"
 
         if not self._weather_adaptive_mode:
             # Set the standard preset mode
             mode_settings = PRESET_MODES[preset_mode]
-            self.unit.set_operation_mode(mode_settings.mode)
-            self.unit.set_week_program(mode_settings.program)
+            device = self.coordinator.devices[self.device_id]
+            await self.hass.async_add_executor_job(device.set_operation_mode, mode_settings.mode)
+            await self.hass.async_add_executor_job(device.set_week_program, mode_settings.program)
         else:
             # If switching to weather adaptive mode, immediately apply temperature adjustment
             if self._weather_manager:
-                self.update_weather_adaptive_temperature()
+                await self.update_weather_adaptive_temperature()
 
-    def set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        # Request refresh to update state
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target hvac mode."""
         self._current_operation_mode = HVACMode.HEAT
 
-    def set_temperature(self, **kwargs: Any) -> None:
+    async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
         if kwargs.get(ATTR_TEMPERATURE) is not None:
             self._target_temperature = kwargs.get(ATTR_TEMPERATURE)
