@@ -204,7 +204,11 @@ class WeatherManager:
             f"new target={new_target:.1f}°C"
         )
 
-        return round(new_target, 1)
+        return round(new_target * 2) / 2
+
+    def round_to_nearest_half(value):
+        """Round the given value to the nearest 0.5."""
+        return round(value * 2) / 2
 
     def register_callback(self, callback):
         """Register a callback for weather updates."""
