@@ -148,24 +148,31 @@ class WeatherManager:
         self._callback_listeners = []
 
     async def update_forecast(self, *_):
-        """Update the weather forecast data."""
+        """Update the weather forecast data using Yr API."""
         try:
-            # Example using OpenWeatherMap API - you'll need to adapt this to your specific weather API
-            url = f"https://api.openweathermap.org/data/2.5/forecast?lat={self.latitude}&lon={self.longitude}&appid={self.api_key}&units=metric"
+            # Yr API endpoint for location forecast
+            url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={self.latitude}&lon={self.longitude}"
+
+            headers = {
+                "User-Agent": "homeassistant-touchline/1.0 github.com/yourusername/your-repo",
+            }
 
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status != 200:
-                        _LOGGER.error(f"Failed to get weather data: {response.status}")
+                        _LOGGER.error(f"Failed to get weather data from Yr: {response.status}, {await response.text()}")
                         return
 
                     data = await response.json()
                     self.forecast_data = data
 
-                    # Calculate average temperature for next 6 hours (assuming hourly forecasts)
-                    forecast_items = data.get('list', [])[:6]  # Get first 6 items
+                    # Extract temperature data for next 6 hours
+                    forecast_items = data.get('properties', {}).get('timeseries', [])[:6]  # Get first 6 items
                     if forecast_items:
-                        temps = [item.get('main', {}).get('temp', 0) for item in forecast_items]
+                        temps = [
+                            item.get('data', {}).get('instant', {}).get('details', {}).get('air_temperature', 0)
+                            for item in forecast_items
+                        ]
                         self.avg_forecast_temp = sum(temps) / len(temps)
                         _LOGGER.info(f"Average forecast temperature for next 6 hours: {self.avg_forecast_temp}°C")
 
@@ -174,7 +181,7 @@ class WeatherManager:
                             callback()
 
         except Exception as err:
-            _LOGGER.error(f"Error updating weather forecast: {err}")
+            _LOGGER.error(f"Error updating weather forecast from Yr: {err}")
 
     def calculate_target_temperature(self, current_target):
         """Calculate the adjusted target temperature based on the forecast."""
