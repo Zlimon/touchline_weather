@@ -35,12 +35,13 @@ from .const import (
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_WEATHER_ADAPTATION,
-    CONF_DEFAULT_ADAPTIVE,
     CONF_BASE_TEMP,
     CONF_ADJUSTMENT_FACTOR,
     CONF_UPDATE_INTERVAL,
+    CONF_DEFAULT_ADAPTIVE_DEVICES,
     CONF_NAME_TEMPLATE,
     CONF_NAMES,
+    CONF_COMFORT_TEMPS,
     DOMAIN,
 )
 
@@ -81,14 +82,15 @@ PLATFORM_SCHEMA = CLIMATE_PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_LATITUDE): cv.latitude,
     vol.Optional(CONF_LONGITUDE): cv.longitude,
     vol.Optional(CONF_WEATHER_ADAPTATION, default=False): cv.boolean,
-    vol.Optional(CONF_DEFAULT_ADAPTIVE, default=[]): vol.All(cv.ensure_list, [cv.positive_int]),
     vol.Optional(CONF_BASE_TEMP, default=DEFAULT_BASE_TEMP): vol.Coerce(float),
     vol.Optional(CONF_ADJUSTMENT_FACTOR, default=DEFAULT_ADJUSTMENT_FACTOR): vol.Coerce(float),
     vol.Optional(CONF_UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL): vol.All(
         cv.time_period, cv.positive_timedelta
     ),
+    vol.Optional(CONF_DEFAULT_ADAPTIVE_DEVICES, default=[]): vol.All(cv.ensure_list, [cv.positive_int]),
     vol.Optional(CONF_NAME_TEMPLATE, default="Touchline {id}"): cv.string,
     vol.Optional(CONF_NAMES, default={}): {cv.positive_int: cv.string},
+    vol.Optional(CONF_COMFORT_TEMPS, default={}): {cv.positive_int: vol.Coerce(float)},
 })
 
 
@@ -152,9 +154,20 @@ class WeatherManager:
         self.forecast_data = None
         self.avg_forecast_temp = None
         self._callback_listeners = []
+        self.last_update_time = None  # Track when we last updated
 
     async def update_forecast(self, *_):
         """Update the weather forecast data using Yr API."""
+        # Prevent duplicate updates within 30 seconds
+        now = datetime.datetime.now()
+        if self.last_update_time and (now - self.last_update_time).total_seconds() < 30:
+            _LOGGER.debug(
+                f"Skipping duplicate update, last update was {(now - self.last_update_time).total_seconds()} seconds ago")
+            return
+
+        self.last_update_time = now
+        _LOGGER.info(f"Weather update triggered at {now}")
+
         try:
             # Yr API endpoint for location forecast
             url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={self.latitude}&lon={self.longitude}"
@@ -182,61 +195,48 @@ class WeatherManager:
                         self.avg_forecast_temp = sum(temps) / len(temps)
                         _LOGGER.info(f"Average forecast temperature for next 6 hours: {self.avg_forecast_temp}°C")
 
-                        # Instead of just notifying, we'll now directly update all devices in adaptive mode
-                        await self.update_all_adaptive_devices()
+                        # Only notify callbacks once
+                        await self.notify_listeners()
 
         except Exception as err:
             _LOGGER.error(f"Error updating weather forecast from Yr: {err}")
 
-        try:
-            _LOGGER.info("Starting scheduled weather data update...")
-            # Rest of your existing code...
-
-            # When notifying listeners, create tasks for async callbacks
-            for callback in self._callback_listeners:
-                if asyncio.iscoroutinefunction(callback):
-                    self.hass.async_create_task(callback())
-                else:
-                    callback()
-
-        except Exception as err:
-            _LOGGER.error(f"Error updating weather forecast from Yr: {err}")
-
-    async def update_all_adaptive_devices(self):
-        """Update all devices that are in weather adaptive mode."""
-        # Call the update method for each registered device
+    async def notify_listeners(self):
+        """Notify all registered callbacks about weather update."""
+        _LOGGER.debug(f"Notifying {len(self._callback_listeners)} listeners of weather update")
+        # Create tasks for each callback
         for callback in self._callback_listeners:
-            if callable(callback):
-                await callback()  # Now we expect callbacks to be async functions
+            if asyncio.iscoroutinefunction(callback):
+                await callback()  # Await directly for more predictable behavior
+            else:
+                callback()
 
-    def calculate_target_temperature(self, current_target):
-        """Calculate the adjusted target temperature based on the forecast."""
+    def calculate_target_temperature(self, base_comfort_temp):
+        """Calculate the adjusted target temperature based on the forecast.
+
+        Args:
+            base_comfort_temp: The baseline comfortable temperature without weather adjustment
+        """
         if self.avg_forecast_temp is None:
-            return current_target
+            return base_comfort_temp
 
         # Simple algorithm: adjust target temperature based on forecast deviation from base temperature
         # If forecast is colder than base temp, increase target temp (and vice versa)
         temp_difference = self.base_temp - self.avg_forecast_temp
         adjustment = temp_difference * self.adjustment_factor
 
-        new_target = current_target + adjustment
+        new_target = base_comfort_temp + adjustment
 
         # Reasonable limits
         new_target = max(min(new_target, 28), 16)
 
         _LOGGER.info(
             f"Weather-adaptive adjustment: forecast avg={self.avg_forecast_temp}°C, "
-            f"base={self.base_temp}°C, adjustment={adjustment:.1f}°C, "
-            f"new target={new_target:.1f}°C"
+            f"base temp={self.base_temp}°C, base comfort={base_comfort_temp}°C, "
+            f"adjustment={adjustment:.1f}°C, new target={new_target:.1f}°C"
         )
 
         return round(new_target * 2) / 2
-
-    def register_callback(self, callback):
-        """Register a callback for weather updates."""
-        if callback not in self._callback_listeners:
-            self._callback_listeners.append(callback)
-            _LOGGER.debug(f"Registered new callback, total callbacks: {len(self._callback_listeners)}")
 
 
 async def async_setup_platform(
@@ -249,7 +249,7 @@ async def async_setup_platform(
 
     host = config[CONF_HOST]
     weather_adaptation = config[CONF_WEATHER_ADAPTATION]
-    default_adaptive = config.get(CONF_DEFAULT_ADAPTIVE, [])
+    default_adaptive_devices = config.get(CONF_DEFAULT_ADAPTIVE_DEVICES, [])
 
     # Weather API settings
     weather_api_key = config.get(CONF_WEATHER_API_KEY)
@@ -294,18 +294,24 @@ async def async_setup_platform(
         )
         await weather_manager.update_forecast()
 
+    comfort_temps = config.get(CONF_COMFORT_TEMPS, {})
+
     # Create device entities
     devices = []
     for device_id in range(coordinator.device_count):
-        is_default_adaptive = (device_id + 1) in default_adaptive
+        device_id_plus_one = device_id + 1
+        comfort_temp = comfort_temps.get(device_id_plus_one, 22.0)  # Default to 22°C
+        default_adaptive = device_id_plus_one in default_adaptive_devices
+
         device = WeatherAdaptiveTouchline(
             coordinator,
             device_id,
             weather_manager,
             weather_adaptation,
+            default_adaptive,
             name_template,
             names,
-            is_default_adaptive
+            comfort_temp
         )
         devices.append(device)
 
@@ -326,14 +332,13 @@ async def async_setup_platform(
     if weather_adaptation:
         _LOGGER.info(f"Setting up scheduled updates every {update_interval}")
 
-        async def scheduled_update(*_):
-            _LOGGER.info(f"Scheduled weather update triggered at {datetime.datetime.now()}")
-            await weather_manager.update_forecast()
+        # Initial update
+        await weather_manager.update_forecast()
 
+        # Schedule future updates
         async_track_time_interval(
-            hass, scheduled_update, update_interval
+            hass, weather_manager.update_forecast, update_interval
         )
-
 
 class WeatherAdaptiveTouchline(ClimateEntity):
     """Representation of a Touchline device with weather adaptation."""
@@ -346,16 +351,17 @@ class WeatherAdaptiveTouchline(ClimateEntity):
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
     def __init__(self, coordinator, device_id, weather_manager=None, weather_adaptation=False,
-                 name_template=None, names=None, default_adaptive=False):
+                 default_adaptive=False, name_template=None, names=None, comfort_temp=22.0):
         """Initialize the Touchline device."""
         self.coordinator = coordinator
         self.device_id = device_id
         self._weather_manager = weather_manager
         self._weather_adaptation = weather_adaptation
         self._weather_adaptive_mode = default_adaptive
-        self._attr_unique_id = f"touchline_weather_{device_id}"
         self._name_template = name_template or "Touchline {id}"
         self._names = names or {}
+        self._base_comfort_temp = comfort_temp
+        self._attr_unique_id = f"touchline_weather_{device_id}"
 
         # Register for weather updates if weather adaptation is enabled
         if self._weather_manager:
@@ -373,14 +379,60 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         if not self._weather_manager or not self._weather_adaptive_mode:
             return
 
+        # Use the stored base comfort temperature
+        new_target = self._weather_manager.calculate_target_temperature(self._base_comfort_temp)
+
+        # Get current target from device for logging purposes only
         current_target = self.target_temperature
-        new_target = self._weather_manager.calculate_target_temperature(current_target)
 
         if abs(new_target - current_target) >= 0.2:  # Only update if significant change
             _LOGGER.info(f"Setting new weather-adaptive temperature for {self.name}: {new_target}°C")
             await self.hass.async_add_executor_job(
                 self.coordinator.devices[self.device_id].set_target_temperature, new_target
             )
+            await self.coordinator.async_request_refresh()
+
+    async def async_set_preset_mode(self, preset_mode):
+        """Set new target preset mode."""
+        self._weather_adaptive_mode = preset_mode == "Weather Adaptive"
+
+        if not self._weather_adaptive_mode:
+            # Set the standard preset mode
+            mode_settings = PRESET_MODES[preset_mode]
+            device = self.coordinator.devices[self.device_id]
+            await self.hass.async_add_executor_job(device.set_operation_mode, mode_settings.mode)
+            await self.hass.async_add_executor_job(device.set_week_program, mode_settings.program)
+        else:
+            # If switching to weather adaptive mode, immediately apply temperature adjustment
+            if self._weather_manager:
+                await self.update_weather_adaptive_temperature()
+
+        # Request refresh to update state
+        await self.coordinator.async_request_refresh()
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set new target hvac mode."""
+        self._current_operation_mode = HVACMode.HEAT
+
+    async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Set new target temperature."""
+        if kwargs.get(ATTR_TEMPERATURE) is not None:
+            target_temperature = kwargs.get(ATTR_TEMPERATURE)
+
+            if self._weather_adaptive_mode:
+                # Store the new base comfort temperature
+                self._base_comfort_temp = target_temperature
+                _LOGGER.info(f"Updated base comfort temperature for {self.name} to {self._base_comfort_temp}°C")
+                # Let weather adaptation adjust from this new base immediately
+                await self.update_weather_adaptive_temperature()
+            else:
+                # Use the coordinator's device instead of self.unit
+                await self.hass.async_add_executor_job(
+                    self.coordinator.devices[self.device_id].set_target_temperature,
+                    target_temperature
+                )
+
+            # Request refresh to update state
             await self.coordinator.async_request_refresh()
 
     @property
@@ -449,39 +501,3 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         if not self._weather_adaptation:
             modes.remove("Weather Adaptive")
         return modes
-
-    async def async_set_preset_mode(self, preset_mode):
-        """Set new target preset mode."""
-        self._weather_adaptive_mode = preset_mode == "Weather Adaptive"
-
-        if not self._weather_adaptive_mode:
-            # Set the standard preset mode
-            mode_settings = PRESET_MODES[preset_mode]
-            device = self.coordinator.devices[self.device_id]
-            await self.hass.async_add_executor_job(device.set_operation_mode, mode_settings.mode)
-            await self.hass.async_add_executor_job(device.set_week_program, mode_settings.program)
-        else:
-            # If switching to weather adaptive mode, immediately apply temperature adjustment
-            if self._weather_manager:
-                await self.update_weather_adaptive_temperature()
-
-        # Request refresh to update state
-        await self.coordinator.async_request_refresh()
-
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set new target hvac mode."""
-        self._current_operation_mode = HVACMode.HEAT
-
-    async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set new target temperature."""
-        if kwargs.get(ATTR_TEMPERATURE) is not None:
-            target_temperature = kwargs.get(ATTR_TEMPERATURE)
-            # Turn off weather adaptive mode if user manually sets temperature
-            self._weather_adaptive_mode = False
-            # Use the coordinator's device instead of self.unit
-            await self.hass.async_add_executor_job(
-                self.coordinator.devices[self.device_id].set_target_temperature,
-                target_temperature
-            )
-            # Request refresh to update state
-            await self.coordinator.async_request_refresh()
