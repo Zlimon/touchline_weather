@@ -176,12 +176,18 @@ class WeatherManager:
                         self.avg_forecast_temp = sum(temps) / len(temps)
                         _LOGGER.info(f"Average forecast temperature for next 6 hours: {self.avg_forecast_temp}°C")
 
-                        # Notify all registered devices about the update
-                        for callback in self._callback_listeners:
-                            callback()
+                        # Instead of just notifying, we'll now directly update all devices in adaptive mode
+                        await self.update_all_adaptive_devices()
 
         except Exception as err:
             _LOGGER.error(f"Error updating weather forecast from Yr: {err}")
+
+    async def update_all_adaptive_devices(self):
+        """Update all devices that are in weather adaptive mode."""
+        # Call the update method for each registered device
+        for callback in self._callback_listeners:
+            if callable(callback):
+                await callback()  # Now we expect callbacks to be async functions
 
     def calculate_target_temperature(self, current_target):
         """Calculate the adjusted target temperature based on the forecast."""
@@ -317,10 +323,10 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         if self._weather_manager:
             self._weather_manager.register_callback(self.weather_update_callback)
 
-    def weather_update_callback(self):
+    async def weather_update_callback(self):
         """Handle weather forecast updates."""
         if self._weather_adaptive_mode:
-            self.update_weather_adaptive_temperature()
+            await self.update_weather_adaptive_temperature()
             self.async_write_ha_state()
 
     async def update_weather_adaptive_temperature(self):
