@@ -211,21 +211,36 @@ class WeatherManager:
             else:
                 callback()
 
-    def calculate_target_temperature(self, base_comfort_temp):
-        """Calculate the adjusted target temperature based on the forecast.
+    def calculate_target_temperature(self, base_comfort_temp, current_room_temp=None):
+        """Calculate the adjusted target temperature based on the forecast and current room temperature.
 
         Args:
             base_comfort_temp: The baseline comfortable temperature without weather adjustment
+            current_room_temp: The current measured room temperature (if available)
         """
         if self.avg_forecast_temp is None:
             return base_comfort_temp
 
-        # Simple algorithm: adjust target temperature based on forecast deviation from base temperature
-        # If forecast is colder than base temp, increase target temp (and vice versa)
+        # Basic weather adjustment as before
         temp_difference = self.base_temp - self.avg_forecast_temp
-        adjustment = temp_difference * self.adjustment_factor
+        weather_adjustment = temp_difference * self.adjustment_factor
 
-        new_target = base_comfort_temp + adjustment
+        # Start with the weather-adjusted target
+        new_target = base_comfort_temp + weather_adjustment
+
+        # If we have current room temperature, factor it in
+        if current_room_temp is not None:
+            # If room is already warmer than comfort temp, reduce the adjustment
+            temp_surplus = current_room_temp - base_comfort_temp
+            if temp_surplus > 0:
+                # Reduce target by a portion of the surplus
+                # The 0.7 factor prevents oscillation (can be tuned)
+                reduction = temp_surplus * 0.7
+                new_target = new_target - reduction
+                _LOGGER.info(
+                    f"Room temperature adjustment: current={current_room_temp}°C, "
+                    f"surplus={temp_surplus:.1f}°C, reduction={reduction:.1f}°C"
+                )
 
         # Reasonable limits
         new_target = max(min(new_target, 28), 16)
@@ -233,7 +248,7 @@ class WeatherManager:
         _LOGGER.info(
             f"Weather-adaptive adjustment: forecast avg={self.avg_forecast_temp}°C, "
             f"base temp={self.base_temp}°C, base comfort={base_comfort_temp}°C, "
-            f"adjustment={adjustment:.1f}°C, new target={new_target:.1f}°C"
+            f"adjustment={weather_adjustment:.1f}°C, new target={new_target:.1f}°C"
         )
 
         return round(new_target * 2) / 2
@@ -385,8 +400,14 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         if not self._weather_manager or not self._weather_adaptive_mode:
             return
 
-        # Use the stored base comfort temperature
-        new_target = self._weather_manager.calculate_target_temperature(self._base_comfort_temp)
+        # Get current room temperature
+        current_room_temp = self.current_temperature
+
+        # Use the stored base comfort temperature and current room temp
+        new_target = self._weather_manager.calculate_target_temperature(
+            self._base_comfort_temp,
+            current_room_temp
+        )
 
         # Get current target from device for logging purposes only
         current_target = self.target_temperature
