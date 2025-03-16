@@ -38,6 +38,8 @@ from .const import (
     CONF_BASE_TEMP,
     CONF_ADJUSTMENT_FACTOR,
     CONF_UPDATE_INTERVAL,
+    CONF_NAME_TEMPLATE,
+    CONF_NAMES,
     DOMAIN,
 )
 
@@ -83,6 +85,8 @@ PLATFORM_SCHEMA = CLIMATE_PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL): vol.All(
         cv.time_period, cv.positive_timedelta
     ),
+    vol.Optional(CONF_NAME_TEMPLATE, default="Touchline {id}"): cv.string,
+    vol.Optional(CONF_NAMES, default={}): {cv.positive_int: cv.string},
 })
 
 
@@ -331,7 +335,7 @@ class WeatherAdaptiveTouchline(ClimateEntity):
     )
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
-    def __init__(self, coordinator, device_id, weather_manager=None, weather_adaptation=False):
+    def __init__(self, coordinator, device_id, weather_manager=None, weather_adaptation=False, name_template=None, names=None):
         """Initialize the Touchline device."""
         self.coordinator = coordinator
         self.device_id = device_id
@@ -340,10 +344,28 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         self._weather_adaptive_mode = False
         self._name = None
         self._attr_unique_id = f"touchline_weather_{device_id}"
+        self._name_template = name_template
+        self._names = names or {}
 
         # Register for weather updates if weather adaptation is enabled
         if self._weather_manager:
             self._weather_manager.register_callback(self.weather_update_callback)
+
+    @property
+    def name(self):
+        """Return the name of the climate device."""
+        # First check if there's a specific name for this device ID
+        device_id_plus_one = self.device_id + 1  # Convert to 1-indexed for user convenience
+        if device_id_plus_one in self._names:
+            return self._names[device_id_plus_one]
+
+        # Otherwise use the template with the ID
+        if self._name_template:
+            return self._name_template.format(id=device_id_plus_one)
+
+        # Fallback to the name from the device
+        device = self.coordinator.devices[self.device_id]
+        return device.get_name()
 
     async def weather_update_callback(self):
         """Handle weather forecast updates."""
