@@ -154,7 +154,7 @@ class WeatherManager:
             url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={self.latitude}&lon={self.longitude}"
 
             headers = {
-                "User-Agent": "homeassistant-touchline/1.0 github.com/yourusername/your-repo",
+                "User-Agent": "homeassistant-touchline/1.0 github.com/Zlimon/touchline_weather",
             }
 
             async with aiohttp.ClientSession() as session:
