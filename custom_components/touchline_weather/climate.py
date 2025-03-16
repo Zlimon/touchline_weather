@@ -35,6 +35,7 @@ from .const import (
     CONF_LATITUDE,
     CONF_LONGITUDE,
     CONF_WEATHER_ADAPTATION,
+    CONF_DEFAULT_ADAPTIVE,
     CONF_BASE_TEMP,
     CONF_ADJUSTMENT_FACTOR,
     CONF_UPDATE_INTERVAL,
@@ -80,6 +81,7 @@ PLATFORM_SCHEMA = CLIMATE_PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_LATITUDE): cv.latitude,
     vol.Optional(CONF_LONGITUDE): cv.longitude,
     vol.Optional(CONF_WEATHER_ADAPTATION, default=False): cv.boolean,
+    vol.Optional(CONF_DEFAULT_ADAPTIVE, default=[]): vol.All(cv.ensure_list, [cv.positive_int]),
     vol.Optional(CONF_BASE_TEMP, default=DEFAULT_BASE_TEMP): vol.Coerce(float),
     vol.Optional(CONF_ADJUSTMENT_FACTOR, default=DEFAULT_ADJUSTMENT_FACTOR): vol.Coerce(float),
     vol.Optional(CONF_UPDATE_INTERVAL, default=DEFAULT_UPDATE_INTERVAL): vol.All(
@@ -247,6 +249,7 @@ async def async_setup_platform(
 
     host = config[CONF_HOST]
     weather_adaptation = config[CONF_WEATHER_ADAPTATION]
+    default_adaptive = config.get(CONF_DEFAULT_ADAPTIVE, [])
 
     # Weather API settings
     weather_api_key = config.get(CONF_WEATHER_API_KEY)
@@ -255,6 +258,9 @@ async def async_setup_platform(
     base_temp = config[CONF_BASE_TEMP]
     adjustment_factor = config[CONF_ADJUSTMENT_FACTOR]
     update_interval = config[CONF_UPDATE_INTERVAL]
+
+    name_template = config.get(CONF_NAME_TEMPLATE, "Touchline {id}")
+    names = config.get(CONF_NAMES, {})
 
     # Check if weather adaptation is enabled but missing API key
     if weather_adaptation and not weather_api_key:
@@ -291,11 +297,15 @@ async def async_setup_platform(
     # Create device entities
     devices = []
     for device_id in range(coordinator.device_count):
+        is_default_adaptive = (device_id + 1) in default_adaptive
         device = WeatherAdaptiveTouchline(
             coordinator,
             device_id,
             weather_manager,
-            weather_adaptation
+            weather_adaptation,
+            name_template,
+            names,
+            is_default_adaptive
         )
         devices.append(device)
 
@@ -335,37 +345,21 @@ class WeatherAdaptiveTouchline(ClimateEntity):
     )
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
 
-    def __init__(self, coordinator, device_id, weather_manager=None, weather_adaptation=False, name_template=None, names=None):
+    def __init__(self, coordinator, device_id, weather_manager=None, weather_adaptation=False,
+                 name_template=None, names=None, default_adaptive=False):
         """Initialize the Touchline device."""
         self.coordinator = coordinator
         self.device_id = device_id
         self._weather_manager = weather_manager
         self._weather_adaptation = weather_adaptation
-        self._weather_adaptive_mode = False
-        self._name = None
+        self._weather_adaptive_mode = default_adaptive
         self._attr_unique_id = f"touchline_weather_{device_id}"
-        self._name_template = name_template
+        self._name_template = name_template or "Touchline {id}"
         self._names = names or {}
 
         # Register for weather updates if weather adaptation is enabled
         if self._weather_manager:
             self._weather_manager.register_callback(self.weather_update_callback)
-
-    @property
-    def name(self):
-        """Return the name of the climate device."""
-        # First check if there's a specific name for this device ID
-        device_id_plus_one = self.device_id + 1  # Convert to 1-indexed for user convenience
-        if device_id_plus_one in self._names:
-            return self._names[device_id_plus_one]
-
-        # Otherwise use the template with the ID
-        if self._name_template:
-            return self._name_template.format(id=device_id_plus_one)
-
-        # Fallback to the name from the device
-        device = self.coordinator.devices[self.device_id]
-        return device.get_name()
 
     async def weather_update_callback(self):
         """Handle weather forecast updates."""
@@ -407,8 +401,23 @@ class WeatherAdaptiveTouchline(ClimateEntity):
     @property
     def name(self):
         """Return the name of the climate device."""
-        device = self.coordinator.devices[self.device_id]
-        return device.get_name()
+        # First check if there's a specific name for this device ID
+        device_id_plus_one = self.device_id + 1  # Convert to 1-indexed for user convenience
+        if device_id_plus_one in self._names:
+            return self._names[device_id_plus_one]
+
+        # Otherwise use the template with the ID
+        return self._name_template.format(id=device_id_plus_one)
+
+    @property
+    def device_info(self):
+        """Return device information about this entity."""
+        return {
+            "identifiers": {(DOMAIN, f"touchline_{self.device_id}")},
+            "name": self.name,
+            "manufacturer": "Roth",
+            "model": "Touchline",
+        }
 
     @property
     def current_temperature(self):
