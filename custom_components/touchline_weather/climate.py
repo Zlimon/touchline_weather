@@ -182,6 +182,20 @@ class WeatherManager:
         except Exception as err:
             _LOGGER.error(f"Error updating weather forecast from Yr: {err}")
 
+        try:
+            _LOGGER.info("Starting scheduled weather data update...")
+            # Rest of your existing code...
+
+            # When notifying listeners, create tasks for async callbacks
+            for callback in self._callback_listeners:
+                if asyncio.iscoroutinefunction(callback):
+                    self.hass.async_create_task(callback())
+                else:
+                    callback()
+
+        except Exception as err:
+            _LOGGER.error(f"Error updating weather forecast from Yr: {err}")
+
     async def update_all_adaptive_devices(self):
         """Update all devices that are in weather adaptive mode."""
         # Call the update method for each registered device
@@ -212,14 +226,11 @@ class WeatherManager:
 
         return round(new_target * 2) / 2
 
-    def round_to_nearest_half(value):
-        """Round the given value to the nearest 0.5."""
-        return round(value * 2) / 2
-
     def register_callback(self, callback):
         """Register a callback for weather updates."""
         if callback not in self._callback_listeners:
             self._callback_listeners.append(callback)
+            _LOGGER.debug(f"Registered new callback, total callbacks: {len(self._callback_listeners)}")
 
 
 async def async_setup_platform(
@@ -298,6 +309,17 @@ async def async_setup_platform(
             DOMAIN, 'force_weather_update', handle_force_weather_update
         )
 
+    if weather_adaptation:
+        _LOGGER.info(f"Setting up scheduled updates every {update_interval}")
+
+        async def scheduled_update(*_):
+            _LOGGER.info(f"Scheduled weather update triggered at {datetime.datetime.now()}")
+            await weather_manager.update_forecast()
+
+        async_track_time_interval(
+            hass, scheduled_update, update_interval
+        )
+
 
 class WeatherAdaptiveTouchline(ClimateEntity):
     """Representation of a Touchline device with weather adaptation."""
@@ -325,6 +347,7 @@ class WeatherAdaptiveTouchline(ClimateEntity):
 
     async def weather_update_callback(self):
         """Handle weather forecast updates."""
+        _LOGGER.debug(f"Weather update callback called for {self.name}, adaptive mode: {self._weather_adaptive_mode}")
         if self._weather_adaptive_mode:
             await self.update_weather_adaptive_temperature()
             self.async_write_ha_state()
