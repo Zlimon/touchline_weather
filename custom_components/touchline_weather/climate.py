@@ -257,7 +257,6 @@ class WeatherManager:
         """Register a callback for weather updates."""
         if callback not in self._callback_listeners:
             self._callback_listeners.append(callback)
-            _LOGGER.debug(f"Registered new callback, total callbacks: {len(self._callback_listeners)}")
 
 
 async def async_setup_platform(
