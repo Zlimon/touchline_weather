@@ -212,7 +212,7 @@ class WeatherManager:
                 callback()
 
     def calculate_target_temperature(self, base_comfort_temp, current_room_temp=None):
-        """Calculate the adjusted target temperature based on the forecast and current room temperature.
+        """Calculate the adjusted target temperature based on the forecast, current room temperature, and time of day.
 
         Args:
             base_comfort_temp: The baseline comfortable temperature without weather adjustment
@@ -221,7 +221,39 @@ class WeatherManager:
         if self.avg_forecast_temp is None:
             return base_comfort_temp
 
-        # Basic weather adjustment as before
+        # Check current time
+        current_time = datetime.datetime.now().time()
+        night_mode_start = datetime.time(0, 0)  # 00:00
+        night_mode_end = datetime.time(4, 0)  # 04:00
+        morning_warmup_end = datetime.time(6, 0)  # 06:00
+
+        # Night mode (reduced heating)
+        if night_mode_start <= current_time <= night_mode_end:
+            # Minimum temperature during night (can be adjusted)
+            night_temp = 18.0
+            _LOGGER.info(f"Night mode active (00:00-04:00): Setting reduced target temperature of {night_temp}°C")
+            return night_temp
+
+        # Morning warmup mode (04:00-06:00)
+        if night_mode_end < current_time < morning_warmup_end:
+            # Calculate how far we are into the warmup period (0.0 to 1.0)
+            total_warmup_minutes = (morning_warmup_end.hour - night_mode_end.hour) * 60
+            current_minutes = (current_time.hour - night_mode_end.hour) * 60 + current_time.minute
+            warmup_progress = min(1.0, current_minutes / total_warmup_minutes)
+
+            # Calculate aggressive warming target (more than regular)
+            temp_difference = self.base_temp - self.avg_forecast_temp
+            aggressive_factor = self.adjustment_factor * 1.5  # More aggressive for morning warmup
+            weather_adjustment = temp_difference * aggressive_factor
+            warmup_target = base_comfort_temp + weather_adjustment
+
+            _LOGGER.info(
+                f"Morning warmup mode (04:00-06:00): progress={warmup_progress:.1f}, "
+                f"target={warmup_target:.1f}°C"
+            )
+            return round(warmup_target * 2) / 2
+
+        # Regular daytime mode
         temp_difference = self.base_temp - self.avg_forecast_temp
         weather_adjustment = temp_difference * self.adjustment_factor
 
@@ -234,7 +266,6 @@ class WeatherManager:
             temp_surplus = current_room_temp - base_comfort_temp
             if temp_surplus > 0:
                 # Reduce target by a portion of the surplus
-                # The 0.7 factor prevents oscillation (can be tuned)
                 reduction = temp_surplus * 0.7
                 new_target = new_target - reduction
                 _LOGGER.info(
