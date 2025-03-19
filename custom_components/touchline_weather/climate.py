@@ -185,15 +185,15 @@ class WeatherManager:
                     data = await response.json()
                     self.forecast_data = data
 
-                    # Extract temperature data for next 6 hours
-                    forecast_items = data.get('properties', {}).get('timeseries', [])[:6]  # Get first 6 items
+                    # Extract temperature data for next 3 hours
+                    forecast_items = data.get('properties', {}).get('timeseries', [])[:3]  # Get first 6 items
                     if forecast_items:
                         temps = [
                             item.get('data', {}).get('instant', {}).get('details', {}).get('air_temperature', 0)
                             for item in forecast_items
                         ]
                         self.avg_forecast_temp = sum(temps) / len(temps)
-                        _LOGGER.info(f"Average forecast temperature for next 6 hours: {self.avg_forecast_temp}°C")
+                        _LOGGER.info(f"Average forecast temperature for next 3 hours: {self.avg_forecast_temp}°C")
 
                         # Only notify callbacks once
                         await self.notify_listeners()
