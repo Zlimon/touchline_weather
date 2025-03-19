@@ -17,6 +17,7 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
+from homeassistant.components import logbook
 from homeassistant.const import (
     ATTR_TEMPERATURE,
     CONF_HOST,
@@ -430,20 +431,27 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         if not self._weather_manager or not self._weather_adaptive_mode:
             return
 
-        # Get current room temperature
+        # Get current room temperature and target temperature
         current_room_temp = self.current_temperature
+        current_target = self.target_temperature
 
-        # Use the stored base comfort temperature and current room temp
+        # Calculate new target temperature
         new_target = self._weather_manager.calculate_target_temperature(
             self._base_comfort_temp,
             current_room_temp
         )
 
-        # Get current target from device for logging purposes only
-        current_target = self.target_temperature
-
         if abs(new_target - current_target) >= 0.2:  # Only update if significant change
             _LOGGER.info(f"Setting new weather-adaptive temperature for {self.name}: {new_target}°C")
+
+            # Create a logbook entry
+            await self.hass.components.logbook.async_log_entry(
+                self.entity_id,
+                f"Weather adaptive adjustment from {current_target}°C to {new_target}°C",
+                "touchline_weather",
+                "climate"
+            )
+
             await self.hass.async_add_executor_job(
                 self.coordinator.devices[self.device_id].set_target_temperature, new_target
             )
@@ -451,7 +459,16 @@ class WeatherAdaptiveTouchline(ClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode):
         """Set new target preset mode."""
+        old_preset = self.preset_mode
         self._weather_adaptive_mode = preset_mode == "Weather Adaptive"
+
+        # Log the preset mode change
+        await self.hass.components.logbook.async_log_entry(
+            self.entity_id,
+            f"Preset mode changed from '{old_preset}' to '{preset_mode}'",
+            "touchline_weather",
+            "climate"
+        )
 
         if not self._weather_adaptive_mode:
             # Set the standard preset mode
@@ -475,14 +492,42 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         """Set new target temperature."""
         if kwargs.get(ATTR_TEMPERATURE) is not None:
             target_temperature = kwargs.get(ATTR_TEMPERATURE)
+            current_target = self.target_temperature
+
+            # Get the user who initiated the change, if available
+            user_id = None
+            context = kwargs.get("context")
+            if context and hasattr(context, "user_id"):
+                user_id = context.user_id
+                user_name = await self.hass.auth.async_get_user(user_id)
+                user_name = user_name.name if user_name else f"User {user_id}"
+            else:
+                user_name = "Unknown user"
 
             if self._weather_adaptive_mode:
                 # Store the new base comfort temperature
                 self._base_comfort_temp = target_temperature
                 _LOGGER.info(f"Updated base comfort temperature for {self.name} to {self._base_comfort_temp}°C")
+
+                # Create a logbook entry for the manual comfort temp change
+                await self.hass.components.logbook.async_log_entry(
+                    self.entity_id,
+                    f"Comfort temperature manually changed from {current_target}°C to {target_temperature}°C by {user_name}",
+                    "touchline_weather",
+                    "climate"
+                )
+
                 # Let weather adaptation adjust from this new base immediately
                 await self.update_weather_adaptive_temperature()
             else:
+                # Create a logbook entry for the direct temperature change
+                await self.hass.components.logbook.async_log_entry(
+                    self.entity_id,
+                    f"Temperature manually set from {current_target}°C to {target_temperature}°C by {user_name}",
+                    "touchline_weather",
+                    "climate"
+                )
+
                 # Use the coordinator's device instead of self.unit
                 await self.hass.async_add_executor_job(
                     self.coordinator.devices[self.device_id].set_target_temperature,
