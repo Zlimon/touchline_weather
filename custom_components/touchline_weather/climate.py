@@ -275,7 +275,7 @@ class WeatherManager:
         _LOGGER.info(
             f"Weather-adaptive adjustment: forecast avg={self.avg_forecast_temp}°C, "
             f"base temp={self.base_temp}°C, base comfort={base_comfort_temp}°C, "
-            f"adjustment={weather_adjustment:.1f}°C, new target={new_target:.1f}°C"
+            f"adjustment={weather_adjustment:.1f}°C, current temperate={current_room_temp}, new temperature={new_target:.1f}°C"
         )
 
         return round(new_target * 2) / 2
@@ -438,7 +438,7 @@ class WeatherAdaptiveTouchline(ClimateEntity):
         current_target = self.target_temperature
 
         if abs(new_target - current_target) >= 0.2:  # Only update if significant change
-            _LOGGER.info(f"Setting new weather-adaptive temperature for {self.name}: {new_target}°C")
+            _LOGGER.info(f"Setting new weather-adaptive temperature for {self.name} from {current_room_temp}°C to {new_target}°C")
             await self.hass.async_add_executor_job(
                 self.coordinator.devices[self.device_id].set_target_temperature, new_target
             )
