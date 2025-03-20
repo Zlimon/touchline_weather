@@ -268,10 +268,6 @@ class WeatherManager:
                 # Reduce target by a portion of the surplus
                 reduction = temp_surplus * 0.7
                 new_target = new_target - reduction
-                _LOGGER.info(
-                    f"Room temperature adjustment: current={current_room_temp}°C, "
-                    f"surplus={temp_surplus:.1f}°C, reduction={reduction:.1f}°C"
-                )
 
         # Reasonable limits
         new_target = max(min(new_target, 28), 16)
@@ -420,7 +416,6 @@ class WeatherAdaptiveTouchline(ClimateEntity):
 
     async def weather_update_callback(self):
         """Handle weather forecast updates."""
-        _LOGGER.debug(f"Weather update callback called for {self.name}, adaptive mode: {self._weather_adaptive_mode}")
         if self._weather_adaptive_mode:
             await self.update_weather_adaptive_temperature()
             self.async_write_ha_state()
