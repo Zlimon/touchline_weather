@@ -235,23 +235,23 @@ class WeatherManager:
             return night_temp
 
         # Morning warmup mode (04:00-06:00)
-        if night_mode_end < current_time < morning_warmup_end:
-            # Calculate how far we are into the warmup period (0.0 to 1.0)
-            total_warmup_minutes = (morning_warmup_end.hour - night_mode_end.hour) * 60
-            current_minutes = (current_time.hour - night_mode_end.hour) * 60 + current_time.minute
-            warmup_progress = min(1.0, current_minutes / total_warmup_minutes)
-
-            # Calculate aggressive warming target (more than regular)
-            temp_difference = self.base_temp - self.avg_forecast_temp
-            aggressive_factor = self.adjustment_factor * 1.5  # More aggressive for morning warmup
-            weather_adjustment = temp_difference * aggressive_factor
-            warmup_target = base_comfort_temp + weather_adjustment
-
-            _LOGGER.info(
-                f"Morning warmup mode (04:00-06:00): progress={warmup_progress:.1f}, "
-                f"target={warmup_target:.1f}°C"
-            )
-            return round(warmup_target * 2) / 2
+        # if night_mode_end < current_time < morning_warmup_end:
+        #     # Calculate how far we are into the warmup period (0.0 to 1.0)
+        #     total_warmup_minutes = (morning_warmup_end.hour - night_mode_end.hour) * 60
+        #     current_minutes = (current_time.hour - night_mode_end.hour) * 60 + current_time.minute
+        #     warmup_progress = min(1.0, current_minutes / total_warmup_minutes)
+        #
+        #     # Calculate aggressive warming target (more than regular)
+        #     temp_difference = self.base_temp - self.avg_forecast_temp
+        #     aggressive_factor = self.adjustment_factor * 1.5  # More aggressive for morning warmup
+        #     weather_adjustment = temp_difference * aggressive_factor
+        #     warmup_target = base_comfort_temp + weather_adjustment
+        #
+        #     _LOGGER.info(
+        #         f"Morning warmup mode (04:00-06:00): progress={warmup_progress:.1f}, "
+        #         f"target={warmup_target:.1f}°C"
+        #     )
+        #     return round(warmup_target * 2) / 2
 
         # Regular daytime mode
         temp_difference = self.base_temp - self.avg_forecast_temp
