@@ -404,22 +404,31 @@ class SonoffIntegratedTouchline(ClimateEntity):  # RENAMED class
         self._base_comfort_temp = comfort_temp
         self._sonoff_sensor = sonoff_sensor  # NEW: Store Sonoff sensor entity ID
         self._attr_unique_id = f"touchline_auto_{device_id}"
+        self._startup_complete = False  # Track if startup is complete
 
         # Register for weather updates
         if self._weather_manager:
             self._weather_manager.register_callback(self.weather_update_callback)
 
-        # CHANGED: Start automatic control immediately
-        self.hass.async_create_task(self.start_automatic_control())
-
     async def start_automatic_control(self):
         """Start automatic temperature control based on weather and Sonoff sensors."""
-        if self._auto_mode and self._weather_manager:
+        if self._auto_mode and self._weather_manager and self._startup_complete:
+            _LOGGER.info(f"Starting automatic control for {self.name}")
             await self.update_automatic_temperature()
+
+    async def async_added_to_hass(self) -> None:
+        """Called when entity is added to Home Assistant."""
+        await super().async_added_to_hass()
+        
+        # Now we can safely start automatic control
+        if self._auto_mode and self._weather_manager:
+            await self.start_automatic_control()
+        
+        self._startup_complete = True
 
     async def weather_update_callback(self):
         """Handle weather forecast updates - trigger automatic adjustment."""
-        if self._auto_mode:
+        if self._auto_mode and self._startup_complete:
             await self.update_automatic_temperature()
             self.async_write_ha_state()
 
