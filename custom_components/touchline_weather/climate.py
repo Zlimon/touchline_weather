@@ -640,3 +640,47 @@ class SonoffIntegratedTouchline(ClimateEntity):
     @property
     def preset_modes(self):
         """Return available preset modes."""
+        modes = list(PRESET_MODES.keys())
+        if not self._weather_adaptation:
+            modes.remove("Auto Weather")
+        return modes
+
+    @property
+    def name(self):
+        """Return the name of the climate device."""
+        device_id_plus_one = self.device_id + 1
+        if device_id_plus_one in self._names:
+            return self._names[device_id_plus_one]
+        return self._name_template.format(id=device_id_plus_one)
+
+    @property
+    def device_info(self):
+        """Return device information about this entity."""
+        return {
+            "identifiers": {(DOMAIN, f"touchline_auto_{self.device_id}")},
+            "name": self.name,
+            "manufacturer": "Roth + Sonoff",
+            "model": "Touchline Auto",
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success
+
+    @property
+    def extra_state_attributes(self):
+        """Return additional state attributes."""
+        attrs = {}
+
+        # Add Sonoff sensor info
+        if self._sonoff_sensor:
+            attrs["sonoff_sensor"] = self._sonoff_sensor
+
+        # Add weather forecast info
+        if self._weather_manager and self._weather_manager.forecast_temp_3h is not None:
+            attrs["forecast_3h"] = self._weather_manager.forecast_temp_3h
+            attrs["base_comfort_temp"] = self._base_comfort_temp
+
+        attrs["auto_mode"] = self._auto_mode
+        return attrs
