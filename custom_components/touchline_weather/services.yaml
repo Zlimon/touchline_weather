@@ -1,8 +1,57 @@
-test_service:
-  name: Test Service
-  description: A simple test
+force_weather_update:
+  name: Force Weather Update
+  description: Manually trigger a weather forecast update for all Touchline devices
+  fields: {}
+
+set_automatic_mode:
+  name: Set Automatic Mode
+  description: Enable or disable automatic weather-based temperature control for a specific device
+  target:
+    entity:
+      domain: climate
+      integration: touchline_weather
   fields:
-    value:
-      name: Value
-      description: Change a distant value
-      example: "hello there!"
+    enabled:
+      name: Enable Automatic Mode
+      description: Whether to enable automatic weather-based control
+      required: true
+      selector:
+        boolean:
+
+update_base_comfort_temp:
+  name: Update Base Comfort Temperature
+  description: Update the base comfort temperature for automatic calculations
+  target:
+    entity:
+      domain: climate
+      integration: touchline_weather
+  fields:
+    temperature:
+      name: Base Comfort Temperature
+      description: The baseline comfortable temperature in Celsius
+      required: true
+      selector:
+        number:
+          min: 10
+          max: 30
+          step: 0.5
+          unit_of_measurement: "°C"
+
+test_temperature_calculation:
+  name: Test Temperature Calculation
+  description: Test the automatic temperature calculation without applying it
+  target:
+    entity:
+      domain: climate
+      integration: touchline_weather
+  fields:
+    test_outdoor_temp:
+      name: Test Outdoor Temperature
+      description: Simulate an outdoor temperature for testing
+      required: false
+      selector:
+        number:
+          min: -20
+          max: 40
+          step: 0.5
+          unit_of_measurement: "°C"
