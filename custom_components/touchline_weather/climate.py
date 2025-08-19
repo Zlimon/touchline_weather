@@ -299,7 +299,7 @@ class WeatherManager:
                 _LOGGER.info(f"Room deficit detected: {temp_surplus:.1f}°C, boosting target by {boost:.1f}°C")
 
         # Reasonable limits
-        new_target = max(min(new_target, 28), 16)
+        new_target = max(min(new_target, 25), 5)
 
         _LOGGER.info(
             f"Auto temperature calculation: 3h forecast={self.forecast_temp_3h}°C, "
