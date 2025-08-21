@@ -275,7 +275,7 @@ class WeatherManager:
 
         # Night mode (reduced heating)
         if night_mode_start <= current_time <= night_mode_end:
-            night_temp = 18.0
+            night_temp = 5.0
             _LOGGER.info(f"Night mode active (00:00-04:00): Setting reduced target temperature of {night_temp}°C")
             return night_temp
 
